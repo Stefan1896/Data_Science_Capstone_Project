@@ -1,0 +1,409 @@
+---
+title: "Exploratory Analyses"
+author: "Stefan Werner"
+date: "12 12 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+# Introduction  
+
+## Goal  
+
+In this analyses, the data used for creating a language prediction model is explored. The data is derived from three different sources (news, blogs and twitter). You can find the data [here](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip). The goal of the language model will be to predict the next word in a phrase.  
+
+
+## Prediction Model  
+
+The prediction algorithm used will be a **Katz's back-Off model**. To understand a Katz's back-off model, understanding of **n-grams** is important.  
+
+A **n-gram** in general is a contiguous sequence of n words from a given sample of text or speech. In the phrase *"When Doves Cry"* for example, there are three different 1-grams (*"When*", *"Doves*", *"Cry*"), two possible 2-grams (*"When Doves"*, *"Doves Cry"*) and one possible 3-gram (*"When Doves Cry"*).   
+
+
+A **Katz's back-off model** estimates the conditional probability of a word given its history in the n-gram. It accomplishes this estimation by backing off through progressively shorter n-grams under certain conditions. 
+For the prediction task, a maximun n-gram size of five is planned. Therefore, the algorithm should work as followed:
+
+* Take user input
+* Search the highest order n-grams (5-grams in our case) for any matches of the first n-1 words with the input.
+* If there is a match, return the most common word following the first n-1 words of the n-grams
+* If there is no match, continuing the same procedure with next oder n-grams
+
+# Exploration
+
+The data will be explored mainly in regard to n-gram frequencies. Especially most common 1-grams and 5-grams are highlighted in total and based on text source. In addition, a short sentimental analyses of the data is done in the end. 
+
+
+## Loading packages
+
+
+```{r, message = FALSE, warning = FALSE}
+library(readr)
+library(tidyr)
+library(tidytext)
+library(lattice)
+library(tibble)
+library(ggplot2)
+library(dplyr)
+library(wordcloud2)
+library(stringi)
+library(stringr)
+library(readtext)
+library(knitr) 
+library(kableExtra)
+library(formattable)
+```
+
+## Get data
+
+The following downloads the dataset and unzips it into a subfolder in the current working directory. The data is loaded with the read_lines function from the [readr](https://readr.tidyverse.org/) package. Strings are also turned into latin-ascii characters.
+
+
+```{r}
+#turning of scientific notations for numbers
+options(scipen=999) 
+
+#create folder
+if(!file.exists("./Data")){
+  dir.create("./Data")
+}
+Url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+
+#download data
+if(!file.exists("./Data/Coursera-SwiftKey.zip")){
+  download.file(Url,destfile="./Data/Coursera-SwiftKey.zip",mode = "wb")
+}
+
+#unzip data
+if(!file.exists("./Data/final")){
+  unzip(zipfile="./Data/Coursera-SwiftKey.zip",exdir="./Data")
+}
+
+#get data with read_lines use latin-ascii characters
+datapath <- paste0("./Data/final/en_US/",list.files("./Data/final/en_US/"))
+datanames <- c("blogtext", "newstext", "twittertext")
+data <- sapply(datapath, read_lines)
+data <- sapply(data, function(x){stringi::stri_trans_general(x, "latin-ascii")})
+names(data) <- datanames
+```
+
+For the exploratory analyses, 5% of the whole dataset was used. Since only the most popular words and n-grams are explorated, there are still enough observations.
+
+
+```{r}
+#subsampling
+set.seed(12233)
+for (i in 1:3){
+  assign(datanames[i], tibble(text = sample(data[[i]], length(data[[i]])*0.05)) %>%
+           add_column(textsource = datanames[i])
+         )
+}
+
+#create df with textsource information
+df <- bind_rows(blogtext, newstext, twittertext)
+```
+
+## Data Preprocessing
+
+Basic cleaning was done to get rid of contractions and special characters.
+
+```{r}
+# Fix Contractions - function to expand contractions
+
+fix.contractions <- function(doc) {
+  doc <- gsub("won't", "will not", doc)
+  doc <- gsub("can't", "can not", doc)
+  doc <- gsub("n't", " not", doc)
+  doc <- gsub("'ll", " will", doc)
+  doc <- gsub("'re", " are", doc)
+  doc <- gsub("'ve", " have", doc)
+  doc <- gsub("'m", " am", doc)
+  doc <- gsub("'d", " would", doc)
+  # 's could be 'is' or could be possessive: it has no expansion
+  doc <- gsub("'s", "", doc)
+  return(doc)
+}
+
+df$text <- sapply(df$text, fix.contractions)
+
+# Remove Special Characters
+removeSpecialChars <- function(x) gsub("[^a-zA-Z0-9 ]", " ", x)
+df$text <- sapply(df$text, removeSpecialChars)
+```
+
+## Most common words 
+
+In the following analyses, the most common words (1-grams) are explored. These will be returned from the prediction model if there is no match for higher order n-grams.
+
+```{r}
+# Creating unigrams (Extracting words from text). Converting to lowercase will also be done by unnest_tokens
+
+unigrams <- df %>%
+  unnest_tokens(word, text)
+
+#count unigrams 
+
+unigram_counts <- unigrams %>%
+  count(word, sort = TRUE)
+
+#unigram graph
+unigram_counts %>%  
+top_n(10) %>%
+ungroup() %>%
+mutate(word = reorder(word, n)) %>%
+ggplot() +
+geom_col(aes(word, n), fill = "#F9A602") +
+theme_classic(base_size = 12) +
+theme(legend.position = "none", 
+  plot.title = element_text(lineheight=.8, face="bold"),
+  panel.grid.major = element_blank()) +
+xlab("") + 
+ylab("Word Count") +
+ggtitle("Most Common Words") +
+coord_flip()
+
+
+```
+
+
+
+## Word count by textsource
+
+For additional analyses, the information of the source of the text (twitter, news, blog) is also taken into account. To get information about total words used in each dataframe, a data tibble with this information is created. Next a data tibble with the counts of each word in dependence of the source of the text is created. The two data tibbles are joined by left_join. A html output created with the package [kableExtra](https://cran.r-project.org/web/packages/kableExtra/index.html) givs an overview of the resulting data tibble.
+
+```{r}
+# wordfrequency count by textsource and total counts by textsource
+
+#get information about total words bytextource
+total_words <- unigrams %>%
+  count(word, textsource) %>%
+  group_by(textsource) %>% 
+  summarize(total = sum(n))
+
+#group unigrams by word and textsource
+unigram_counts_textsource <- unigrams %>%
+  count(word, textsource, sort = TRUE) %>%
+  ungroup()
+
+#combine datasets
+textsource_words <- left_join(unigram_counts_textsource, total_words)
+
+#words by textsource exploration
+textsource_words %>% 
+mutate(word_frequency = n/total) %>%
+select(word,textsource, n, word_frequency) %>%
+head(10) %>%
+mutate(word = color_tile("#F9A602", "#F9A602")(word)) %>%
+mutate(word_frequency = color_tile("#F9A602", "#F9A602")(word_frequency)) %>%
+kable("html", escape = FALSE, align = "c", caption = "Most common words separated by textsource") %>%
+kable_styling(bootstrap_options = 
+                  c("striped", "condensed", "bordered"), 
+                  full_width = FALSE)
+
+
+```
+The 10 most common words are next displayed for each textsource in a graph.
+
+```{r}
+# most common words by textsource graph
+
+colfunc <- colorRampPalette(c("#FDEECA", "#F9A602"))
+
+popular_words <- unigrams %>%
+  group_by(textsource) %>%
+  count(word, textsource, sort = TRUE) %>%
+  slice(seq_len(8)) %>%
+  ungroup() %>%
+  arrange(textsource,n) %>%
+  mutate(row = row_number())
+
+popular_words %>%
+ggplot(aes(row, n, fill = textsource)) +
+geom_col(show.legend = NULL) +
+labs(x = NULL, y = "Word Count") +
+ggtitle("Popular words by source of text") + 
+theme_classic(base_size = 12) +
+facet_wrap(~textsource, scales = "free") +
+scale_x_continuous(  
+  breaks = popular_words$row, 
+  labels = popular_words$word) +
+coord_flip() +
+theme(plot.title = element_text(lineheight=.8, face="bold")) +
+scale_fill_manual(values = colfunc(3))   
+
+```
+
+
+
+## Word count by total words.
+
+In the following analyses the word counts were compared to the total amount of words to get information about how many unique words are needed to cover 50% of all word instances in the subsample.
+
+```{r}
+
+unigrams %>%
+count(word, sort = TRUE) %>%
+ungroup() %>%
+mutate(rank = row_number(),
+        total = sum(n), 
+        term_frequency = n/total,
+        cumsum = cumsum(term_frequency)) %>%
+filter(cumsum >= 0.5) %>%
+head(1) %>%
+mutate(rank = color_tile("#F9A602", "#F9A602")(rank)) %>%
+kable("html", escape = FALSE, align = "c", caption = "Most used words separated by textsource") %>%
+kable_styling(bootstrap_options = 
+              c("striped", "condensed", "bordered"), 
+              full_width = FALSE)
+
+
+```
+
+Therefore, 134 words are used to cover 50% of all word instances in the subsample.
+
+
+## Fivegram Analyses
+
+To get more information about higher order n-grams, most common fivegrams are explored as well. Similar to the unigrams, they are created with unnest_tokens. The following graph shows the most common fivegrams in the whole dataset.
+
+```{r}
+
+#generating fivegrams
+fivegrams <- df %>%
+  unnest_tokens(fivegram, text, token = "ngrams", n = 5) 
+
+#fivegram counts
+fivegram_counts <- fivegrams %>%
+  count(fivegram, sort = TRUE)
+
+fivegram_counts %>%
+head(9) %>%
+ungroup() %>%
+mutate(fivegram = reorder(fivegram, n)) %>%
+ggplot() +
+geom_col(aes(fivegram, n), fill = "#F9A602") +
+theme_classic(base_size = 12) +
+theme(legend.position = "none", 
+      plot.title = element_text(lineheight=.8, face="bold"),
+      panel.grid.major = element_blank()) +
+xlab("") + 
+ylab("Fivegram Count") +
+ggtitle("Most Common Fivegrams") +
+coord_flip()
+
+```
+
+
+## Fivegrams by textsource
+
+An additional graph was created to explore the most common 10 fivegrams by the source of text.
+
+```{r}
+# most common fivegrams by textsource
+
+popular_fivegrams <- fivegrams %>%
+  group_by(textsource) %>%
+  count(fivegram, textsource, sort = TRUE) %>%
+  slice(seq_len(8)) %>%
+  ungroup() %>%
+  arrange(textsource,n) %>%
+  mutate(row = row_number())
+
+popular_fivegrams %>%
+ggplot(aes(row, n, fill = textsource)) +
+geom_col(show.legend = NULL) +
+labs(x = NULL, y = "Word Count") +
+ggtitle("Popular fivegrams by source of text") + 
+theme_classic(base_size = 12) +
+facet_wrap(~textsource, scales = "free") +
+scale_x_continuous(  
+  breaks = popular_fivegrams$row, 
+  labels = popular_fivegrams$fivegram) +
+coord_flip() +
+theme(plot.title = element_text(lineheight=.8, face="bold")) +
+scale_fill_manual(values = colfunc(3)) 
+```
+
+
+From the exploratory analyses, you get an impression which are the most common fivegrams and unigrams. As described in the beginning, i will build fivegrams, fourgrams, trigrams, bigrams and unigrams for my prediction model. A **Katz's Backoff Modell** will be used for next word prediction. 
+
+
+## Additional: Sentiment analyses
+
+In the following analyses only sentimental meaningful words are explorated. This is not necessery for word prediction, but gives interesting information. First, the most common meaningfull words are displayed in a graph.
+
+```{r}
+#most common meaningfull words
+data(stop_words)
+
+unigrams %>%
+anti_join(stop_words) %>% 
+filter(nchar(word) > 3) %>%
+count(word, sort = TRUE) %>%
+top_n(10) %>%
+ungroup() %>%
+mutate(word = reorder(word, n)) %>%
+ggplot() +
+geom_col(aes(word, n), fill = "#F9A602") +
+theme(legend.position = "none", 
+      plot.title = element_text(hjust = 0.5),
+      panel.grid.major = element_blank()) +
+xlab("") + 
+ylab("Song Count") +
+ggtitle("Most common meaningful words in blog, twitter and news data") +
+coord_flip()
+
+```
+
+### wordcloud of meaningfull words
+
+Although not having the best reputation, word clouds can give a seperate view on the most common words.
+
+```{r}
+
+#wordfrequency of meaningfull words displayed by wordcloud
+unigrams %>%
+anti_join(stop_words) %>% 
+filter(nchar(word) > 3) %>%
+count(word, sort = TRUE) %>%
+top_n(300) %>%
+wordcloud2(size = 0.5)
+```
+
+
+### Most common meaningfull words by textsource
+
+Similar to previous analyses, the most meaningful words are also explored by the source of text.
+
+```{r}
+# most common meaningfull words by textsource graph
+
+popular_meaningful_words <- unigrams %>%
+  anti_join(stop_words) %>% 
+  filter(nchar(word) > 3) %>%
+  group_by(textsource) %>%
+  count(word, textsource, sort = TRUE) %>%
+  slice(seq_len(8)) %>%
+  ungroup() %>%
+  arrange(textsource,n) %>%
+  mutate(row = row_number())
+
+popular_meaningful_words %>%
+ggplot(aes(row, n, fill = textsource)) +
+geom_col(show.legend = NULL) +
+labs(x = NULL, y = "Word Count") +
+ggtitle("Popular meaningful words by source of text") + 
+theme_classic(base_size = 12) +
+facet_wrap(~textsource, scales = "free") +
+scale_x_continuous(  
+  breaks = popular_meaningful_words$row, 
+  labels = popular_meaningful_words$word) +
+coord_flip() +
+theme(plot.title = element_text(lineheight=.8, face="bold")) +
+scale_fill_manual(values = colfunc(3)) 
+
+```
+
+There are quit a few interesting informations about the frequency of meaningfull words in the different sources. As you would probably expect, words wit a positive sentiment like love and happy are more frequently used in twitter texts in comparison to news and blog texts.
